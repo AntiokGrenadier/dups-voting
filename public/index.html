@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content" />
+<meta name="theme-color" content="#0b1d2a" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#0b1d2a" />
+<meta name="format-detection" content="telephone=no,date=no,address=no,email=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="color-scheme" content="dark" />
+<meta http-equiv="Cache-Control" content="no-store" />
+<title>DUPS Photo Contest</title>
+<link rel="icon" href="data:," />
+<!-- Font preconnect for consistent rendering across iOS, Android, desktop. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- SPLASH + ROLE PICK -->
+<section id="screen-splash" class="screen">
+  <div class="splash-hero">
+    <img class="splash-image"
+         src="https://dups.club/wp-content/uploads/2026/05/N-12-1024x576.jpg"
+         alt="Underwater photograph - DUPS"
+         referrerpolicy="no-referrer" />
+    <div class="splash-overlay">
+      <h1 class="splash-title">Dallas Underwater<br/>Photography Society</h1>
+      <h2 class="splash-subtitle">Photo Contest</h2>
+    </div>
+  </div>
+
+  <div class="role-card">
+    <p class="role-prompt">Join as:</p>
+    <label class="role-option" id="role-option-admin">
+      <input type="radio" name="role" value="admin" id="role-admin" />
+      <span>Administrator</span>
+      <small id="admin-status"></small>
+    </label>
+    <label class="role-option" id="role-option-voter">
+      <input type="radio" name="role" value="voter" id="role-voter" />
+      <span>Voter</span>
+      <small id="voter-status"></small>
+    </label>
+    <button id="role-continue" class="btn primary" disabled type="button">Continue</button>
+    <p id="role-error" class="error-text" role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<!-- ADMIN: SET PHOTO COUNT -->
+<section id="screen-admin-setup" class="screen">
+  <header class="page-header">
+    <h2>Administrator</h2>
+    <p class="muted">Set up the vote</p>
+  </header>
+
+  <div class="card">
+    <label for="photo-count-input" class="big-label">How many photos in this Vote?</label>
+    <input id="photo-count-input"
+           type="number" min="1" max="500" step="1"
+           inputmode="numeric" pattern="[0-9]*"
+           autocomplete="off" />
+    <button id="photo-count-submit" class="btn primary" type="button">Set</button>
+  </div>
+
+  <div id="photo-count-confirm" class="card hidden">
+    <p class="big-text">You have selected: <strong id="photo-count-display"></strong></p>
+    <div class="row">
+      <button id="photo-count-change" class="btn ghost" type="button">Change</button>
+      <button id="photo-count-confirm-btn" class="btn primary" type="button">Confirm &amp; Open Voting</button>
+    </div>
+  </div>
+</section>
+
+<!-- ADMIN: VOTING IN PROGRESS -->
+<section id="screen-admin-voting" class="screen">
+  <header class="page-header projector">
+    <h2>Voting Open</h2>
+    <p class="muted">Photos in vote: <strong id="admin-photo-count"></strong></p>
+  </header>
+
+  <div class="projector-grid">
+    <div class="card qr-card">
+      <h3>Scan to vote</h3>
+      <img id="qr-image" class="qr-image" alt="QR code for voters" />
+      <p class="muted small qr-url" id="qr-url"></p>
+    </div>
+
+    <div class="projector-side">
+      <div class="card stats-card">
+        <div class="stats-row">
+          <span class="stat-label">Joined</span>
+          <span class="stat-value" id="joined-count">0</span>
+        </div>
+        <div class="stats-row">
+          <span class="stat-label">Active</span>
+          <span class="stat-value" id="voter-count">0</span>
+        </div>
+        <div class="stats-row">
+          <span class="stat-label">Voted</span>
+          <span class="stat-value" id="vote-count">0</span>
+        </div>
+      </div>
+
+      <div class="card actions-card">
+        <div class="row">
+          <button id="rotate-qr-btn" class="btn ghost" type="button">Rotate QR</button>
+          <button id="lock-room-btn" class="btn ghost" type="button">Lock room</button>
+        </div>
+        <p class="muted small">Rotating invalidates the old QR. Existing voters keep voting.</p>
+        <button id="count-votes-btn" class="btn danger large" type="button">Count Votes Now</button>
+        <p class="muted small">Closes voting and tallies all submissions. Cannot be undone within this session.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ADMIN: RESULTS -->
+<section id="screen-admin-results" class="screen">
+  <header class="page-header projector">
+    <h2>Results</h2>
+    <p class="muted">Total votes: <strong id="results-total"></strong></p>
+  </header>
+
+  <!-- Cluster-warning callout (shown if any IP cluster produced >1 vote) -->
+  <div id="cluster-warning" class="card warning hidden">
+    <p><span class="warning-label">Review</span></p>
+    <p><span id="cluster-warning-text"></span></p>
+    <p class="muted small">This is informational. The votes have NOT been invalidated. Use your judgment to verify.</p>
+  </div>
+
+  <div class="results-wrap">
+    <table class="results-table">
+      <thead>
+        <tr>
+          <th class="col-rank">Rank</th>
+          <th class="col-photo">Photo #</th>
+          <th class="col-votes">Votes</th>
+          <th class="col-bar" aria-hidden="true"></th>
+        </tr>
+      </thead>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+
+  <div class="row results-actions">
+    <button id="download-archive-btn" class="btn ghost" type="button">Download archive (JSON)</button>
+    <button id="new-session-btn" class="btn primary" type="button">Start New Session</button>
+  </div>
+</section>
+
+<!-- VOTER: WAITING -->
+<section id="screen-voter-wait" class="screen">
+  <div class="splash-hero small">
+    <img class="splash-image"
+         src="https://dups.club/wp-content/uploads/2026/05/N-12-1024x576.jpg"
+         alt=""
+         referrerpolicy="no-referrer" />
+    <div class="splash-overlay">
+      <h1 class="splash-title">Dallas Underwater Photography Society</h1>
+      <h2 class="splash-subtitle">Photo Contest</h2>
+    </div>
+  </div>
+  <div class="card center">
+    <p>Waiting for the Administrator to open voting…</p>
+    <div class="spinner" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- VOTER: SUBMIT VOTE -->
+<section id="screen-voter-vote" class="screen">
+  <header class="page-header">
+    <h2>Cast Your Vote</h2>
+    <p class="muted">Choose a photo from 1 to <strong id="voter-max"></strong></p>
+  </header>
+
+  <div class="card">
+    <label for="vote-input" class="big-label">Enter the number of the photo which you believe is the best:</label>
+    <input id="vote-input"
+           type="number" min="1" step="1"
+           inputmode="numeric" pattern="[0-9]*"
+           autocomplete="off" enterkeyhint="send" />
+    <button id="vote-submit" class="btn primary large" type="button">Submit Vote</button>
+    <p id="vote-status" class="status-text" role="status" aria-live="polite"></p>
+    <p class="muted small">You may change your vote until the Administrator closes voting.</p>
+  </div>
+</section>
+
+<!-- VOTER: CLOSED -->
+<section id="screen-voter-closed" class="screen">
+  <header class="page-header">
+    <h2>Voting Closed</h2>
+  </header>
+  <div class="card center">
+    <p>Thank you. The Administrator has closed voting and is tallying results.</p>
+    <p class="muted small">Your final vote: <strong id="voter-final"></strong></p>
+  </div>
+</section>
+
+<!-- ERROR -->
+<section id="screen-error" class="screen">
+  <div class="card center">
+    <h2 id="error-title">Disconnected</h2>
+    <p id="error-message" class="muted"></p>
+    <button id="error-reload" class="btn primary" type="button">Reload</button>
+  </div>
+</section>
+
+<script src="/app.js"></script>
+</body>
+</html>

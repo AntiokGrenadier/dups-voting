@@ -1,0 +1,19 @@
+{
+  "name": "dups-voting",
+  "version": "5.0.0",
+  "description": "Dallas Underwater Photography Society - hardened real-time photo contest voting",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/run-sims.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}
