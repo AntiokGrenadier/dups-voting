@@ -236,7 +236,7 @@
   // -----------------------------------------------------------------------
   // QR fetch Original
   // -----------------------------------------------------------------------
- // let qrLoadInFlight = false;
+     let qrLoadInFlight = false;
  // async function loadQR() {
    // if (qrLoadInFlight) return;
    // qrLoadInFlight = true;
