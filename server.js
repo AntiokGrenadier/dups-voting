@@ -418,17 +418,30 @@ app.post('/api/join', requireCsrfHeader, (req, res) => {
   const ip  = clientIp(req);
   const ipH = ipHash(ip);
 
+
+    // *************************************************** Change to allow multiple scans of the same QR code, with a single redemption per jti. ***************************************************
+
   // Single-redemption jti: if this jti was already redeemed (or invalidated by
   // an admin QR rotation), reject unless the requester has the exact cookie
   // of the original redeemer.
-  if (parsed.jti && session.redeemedJtis[parsed.jti]) {
-    const redeemerVid = session.redeemedJtis[parsed.jti];
-    const isOriginal = existing && existing.vid === redeemerVid && redeemerVid !== '__invalidated';
-    if (!isOriginal) {
-      log('voter_join_jti_replay', { jti: parsed.jti, ipHash: ipH, reason: redeemerVid === '__invalidated' ? 'rotated' : 'replay' });
-      return res.status(409).json({ error: 'token_used', message: 'This QR code has already been used or has been replaced. Ask the Administrator for a fresh one.' });
+         // if (parsed.jti && session.redeemedJtis[parsed.jti]) {
+        //    const redeemerVid = session.redeemedJtis[parsed.jti];
+        //  const isOriginal = existing && existing.vid === redeemerVid && redeemerVid !== '__invalidated';
+        // if (!isOriginal) {
+        //log('voter_join_jti_replay', { jti: parsed.jti, ipHash: ipH, reason: redeemerVid === '__invalidated' ? 'rotated' : 'replay' });
+        //return res.status(409).json({ error: 'token_used', message: 'This QR code has already been used or has been replaced. Ask the Administrator for a fresh one.' });
+    // }
+    //}
+
+    // ******************************************** Replacement for the above block: ********************************************
+    // Allow multiple voters to scan the same QR code.
+    // Only block scans if the QR has been explicitly rotated by the admin.
+    if (parsed.jti && session.redeemedJtis[parsed.jti] === '__invalidated') {
+        log('voter_join_jti_rotated', { jti: parsed.jti, ipHash: ipH });
+        return res.status(409).json({ error: 'token_used', message: 'This QR code has been replaced. Please scan the new QR code.' });
     }
-  }
+
+    // ****************************************** end replacement block ******************************************
 
   // Mint a fresh voter cookie.
   const vid = crypto.randomBytes(8).toString('hex');
