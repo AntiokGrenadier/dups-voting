@@ -234,26 +234,59 @@
   $('#error-reload').addEventListener('click', () => location.reload());
 
   // -----------------------------------------------------------------------
-  // QR fetch
+  // QR fetch Original
   // -----------------------------------------------------------------------
-  let qrLoadInFlight = false;
-  async function loadQR() {
-    if (qrLoadInFlight) return;
-    qrLoadInFlight = true;
-    try {
-      const r = await fetch('/api/qr', { credentials: 'same-origin' });
-      if (!r.ok) { $('#qr-url').textContent = 'Could not generate QR.'; return; }
-      const data = await r.json();
-      $('#qr-image').src = data.dataUrl;
-      $('#qr-url').textContent = data.url;
-    } catch (e) {
-      $('#qr-url').textContent = 'QR fetch failed.';
-    } finally {
-      qrLoadInFlight = false;
-    }
-  }
+ // let qrLoadInFlight = false;
+ // async function loadQR() {
+   // if (qrLoadInFlight) return;
+   // qrLoadInFlight = true;
+   // try {
+    //  const r = await fetch('/api/qr', { credentials: 'same-origin' });
+   //   if (!r.ok) { $('#qr-url').textContent = 'Could not generate QR.'; return; }
+   //   const data = await r.json();
+    //  $('#qr-image').src = data.dataUrl;
+    //  $('#qr-url').textContent = data.url;
+    //} catch (e) {
+    //  $('#qr-url').textContent = 'QR fetch failed.';
+    //} finally {
+     // qrLoadInFlight = false;
+    //}
+  //}
 
-  // -----------------------------------------------------------------------
+    //__________________________________________________________________
+    // End of original QR fetch. New QR fetch below 
+    //------------------------------------------------------------------
+    async function loadQR() {
+        if (qrLoadInFlight) return;
+        qrLoadInFlight = true;
+        try {
+            const r = await fetch('/api/qr', { credentials: 'same-origin' });
+            if (!r.ok) { $('#qr-url').textContent = 'Could not generate QR.'; return; }
+            const data = await r.json();
+            $('#qr-image').src = data.dataUrl;
+            // Show full URL immediately while we fetch the short one
+            $('#qr-url').textContent = data.url;
+            // Try to shorten via TinyURL
+            try {
+                const tiny = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(data.url)}`);
+                if (tiny.ok) {
+                    const short = await tiny.text();
+                    if (short.startsWith('https://tinyurl.com/')) {
+                        $('#qr-url').textContent = short;
+                    }
+                }
+            } catch { /* keep full URL if shortening fails */ }
+        } catch (e) {
+            $('#qr-url').textContent = 'QR fetch failed.';
+        } finally {
+            qrLoadInFlight = false;
+        }
+    }
+    //---------------------------------------------------------------
+    //end of new QR fetch implementation
+    //__________________________________________________________________
+
+    // -----------------------------------------------------------------------
   // Routing
   // -----------------------------------------------------------------------
   function route() {
