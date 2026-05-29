@@ -332,16 +332,40 @@ app.use((req, res, next) => {
   if (IS_PUBLIC_HTTPS) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; " +
-    "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
-    "font-src 'self' https://fonts.gstatic.com data:; " +
-    "script-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com; " +
-    `connect-src ${CSP_CONNECT_SRC}; ` +
-    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-  );
-  next();
+
+    //_____________________________________________________________________________________________________________
+    //  Pre Sort URL mod
+    //--------------------------------------------------------------------------------------------------------------
+
+   // res.setHeader('Content-Security-Policy',
+   // "default-src 'self'; " +
+   // "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
+   // "font-src 'self' https://fonts.gstatic.com data:; " +
+   // "script-src 'self'; " +
+   // "style-src 'self' https://fonts.googleapis.com; " +
+  //  `connect-src ${CSP_CONNECT_SRC}; ` +
+ //   "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+//  );
+
+    //_____________________________________________________________________________________________________________
+    // end pre Sort URL mod
+    // Begin mod 1
+    //--------------------------------------------------------------------------------------------------------------
+    res.setHeader('Content-Security-Policy',
+        "default-src 'self'; " +
+        "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
+        "font-src 'self' https://fonts.gstatic.com data:; " +
+        "script-src 'self'; " +
+        "style-src 'self' https://fonts.googleapis.com; " +
+        `connect-src ${CSP_CONNECT_SRC} https://tinyurl.com; ` +
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    );
+
+    //--------------------------------------------------------------------------------------------------------------
+    // end mod 1
+    //----------------------------------------------------------------------------------------------
+
+    next();
 });
 
 // CSRF guard for state-changing endpoints. Cross-origin browser JS cannot send
