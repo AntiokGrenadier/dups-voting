@@ -236,7 +236,7 @@
   // -----------------------------------------------------------------------
   // QR fetch Original
   // -----------------------------------------------------------------------
-     let qrLoadInFlight = false;
+   //  let qrLoadInFlight = false;
  // async function loadQR() {
    // if (qrLoadInFlight) return;
    // qrLoadInFlight = true;
@@ -256,6 +256,10 @@
     //__________________________________________________________________
     // End of original QR fetch. New QR fetch below 
     //------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // QR fetch
+    // -----------------------------------------------------------------------
+    let qrLoadInFlight = false;
     async function loadQR() {
         if (qrLoadInFlight) return;
         qrLoadInFlight = true;
@@ -267,13 +271,13 @@
             // Show full URL immediately while we fetch the short one
             $('#qr-url').textContent = data.url;
             // Try to shorten via TinyURL
-          //  try {
-            //    const tiny = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(data.url)}`);
-            //    if (tiny.ok) {
-             //       const short = await tiny.text();
-             //       if (short.startsWith('https://tinyurl.com/')) {
-              //          $('#qr-url').textContent = short;
-              //      }
+            try {
+                const tiny = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(data.url)}`);
+                if (tiny.ok) {
+                    const short = await tiny.text();
+                    if (short.startsWith('https://tinyurl.com/')) {
+                        $('#qr-url').textContent = short;
+                    }
                 }
             } catch { /* keep full URL if shortening fails */ }
         } catch (e) {
