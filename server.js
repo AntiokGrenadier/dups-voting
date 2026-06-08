@@ -877,7 +877,12 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   log('boot', { port: PORT, sessionId: session.id, publicUrl: PUBLIC_URL && PUBLIC_URL.origin });
 });
-
+// --- API: clear cookies on reset
+app.post('/api/clear-cookies', requireCsrfHeader, (req, res) => {
+    clearSignedCookie(res, VOTER_COOKIE_NAME, req);
+    clearSignedCookie(res, ADMIN_COOKIE_NAME, req);
+    res.json({ ok: true });
+});
 function shutdown() {
   console.log('\nShutting down...');
   clearInterval(heartbeatTimer);
