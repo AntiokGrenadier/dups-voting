@@ -387,8 +387,15 @@
             if (manualClose) return;
             if (ev.code === 4000) {
                 resetLocalState();
-                fetch('/api/clear-cookies', { method: 'POST', headers: { 'X-DUPS-Origin': 'same-site' }, credentials: 'same-origin' })
-                    .finally(() => location.reload());
+                // Clear cookies on ALL devices (admin and voters)
+                fetch('/api/clear-cookies', {
+                    method: 'POST',
+                    headers: { 'X-DUPS-Origin': 'same-site' },
+                    credentials: 'same-origin'
+                }).finally(() => {
+                    // Force hard reload to clear all state
+                    window.location.href = window.location.origin + window.location.pathname;
+                });
             }
             scheduleReconnect();
         });
