@@ -809,15 +809,14 @@ function handleMessage(ws, meta, msg) {
           results: session.results,
         });
       }
-      log('session_reset', { previousSessionId: session.id });
-      freshSession();
-      // Tell clients to clear their cookies, then disconnect them.
-      broadcast({ type: 'reset' });
-      for (const [w] of clients.entries()) {
-        try { w.close(4000, 'session_reset'); } catch {}
-      }
-      return;
-    }
+          log('session_reset', { previousSessionId: session.id });
+          freshSession();
+          // Tell clients to clear their cookies, then disconnect them.
+          broadcast({ type: 'reset' });
+          for (const [w, m] of clients.entries()) {
+              try { w.close(4000, 'session_reset'); } catch { }
+          }
+          return;
 
     case 'heartbeat':
       sendTo(ws, { type: 'heartbeat-ack' });

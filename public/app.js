@@ -430,9 +430,11 @@
       if (manualClose) return;
 // Fix
         if (ev.code === 4000) {
-            // Session reset from server. Wipe everything and reload.
+            // Session reset from server. Clear cookies, wipe state, reload.
             resetLocalState();
-            location.reload();
+            // Clear admin and voter cookies by hitting a clear endpoint
+            fetch('/api/clear-cookies', { method: 'POST', headers: { 'X-DUPS-Origin': 'same-site' }, credentials: 'same-origin' })
+                .finally(() => location.reload());
         }
 
         scheduleReconnect();
@@ -531,6 +533,12 @@
       connectWS();
     }
   });
+    // --- API: clear cookies on reset
+    app.post('/api/clear-cookies', requireCsrfHeader, (req, res) => {
+        clearSignedCookie(res, VOTER_COOKIE_NAME, req);
+        clearSignedCookie(res, ADMIN_COOKIE_NAME, req);
+        res.json({ ok: true });
+    });
 
   // Boot
   (async function boot() {
