@@ -295,14 +295,6 @@
             qrLoadInFlight = false;
         }
     }
-Change 2 — Find line 310 and replace:
-javascript          loadQR();
-    With:
-javascript        loadQR();
-Then push:
-git add.
-git commit - m "Fix QR code on second session, use TinyURL for QR encoding"
-git push origin mainSonnet 4.6 Low
     //---------------------------------------------------------------
     //end of new QR fetch implementation
     //__________________________________________________________________
