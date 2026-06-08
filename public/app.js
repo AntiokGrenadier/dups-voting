@@ -261,31 +261,48 @@
     // -----------------------------------------------------------------------
     let qrLoadInFlight = false;
     async function loadQR() {
+        qrLoadInFlight = false; // always allow a fresh load
         if (qrLoadInFlight) return;
         qrLoadInFlight = true;
         try {
             const r = await fetch('/api/qr', { credentials: 'same-origin' });
             if (!r.ok) { $('#qr-url').textContent = 'Could not generate QR.'; return; }
             const data = await r.json();
-            $('#qr-image').src = data.dataUrl;
-            // Show full URL immediately while we fetch the short one
-            $('#qr-url').textContent = data.url;
-            // Try to shorten via TinyURL
+            // Get TinyURL first, use it for both QR code and display
+            let voterUrl = data.url;
             try {
                 const tiny = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(data.url)}`);
                 if (tiny.ok) {
                     const short = await tiny.text();
                     if (short.startsWith('https://tinyurl.com/')) {
-                        $('#qr-url').textContent = short;
+                        voterUrl = short;
                     }
                 }
             } catch { /* keep full URL if shortening fails */ }
+            // QR code encodes the TinyURL
+            const QRdata = await fetch('/api/qr?url=' + encodeURIComponent(voterUrl), { credentials: 'same-origin' });
+            if (QRdata.ok) {
+                const qrJson = await QRdata.json();
+                $('#qr-image').src = qrJson.dataUrl;
+            } else {
+                $('#qr-image').src = data.dataUrl; // fallback to original
+            }
+            // Show full URL to admin, TinyURL below QR
+            $('#qr-url').textContent = voterUrl;
         } catch (e) {
             $('#qr-url').textContent = 'QR fetch failed.';
         } finally {
             qrLoadInFlight = false;
         }
     }
+Change 2 — Find line 310 and replace:
+javascript          loadQR();
+    With:
+javascript        loadQR();
+Then push:
+git add.
+git commit - m "Fix QR code on second session, use TinyURL for QR encoding"
+git push origin mainSonnet 4.6 Low
     //---------------------------------------------------------------
     //end of new QR fetch implementation
     //__________________________________________________________________
