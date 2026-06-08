@@ -428,13 +428,14 @@
     });
     ws.addEventListener('close', (ev) => {
       if (manualClose) return;
-      if (ev.code === 4000) {
-        // Session reset from server. Wipe everything.
-        resetLocalState();
-        // Reload to force a fresh page state (the cleanest cleanup of any
-        // lingering DOM, intervals, etc.). User taps Reload on the splash.
-      }
-      scheduleReconnect();
+// Fix
+        if (ev.code === 4000) {
+            // Session reset from server. Wipe everything and reload.
+            resetLocalState();
+            location.reload();
+        }
+
+        scheduleReconnect();
     });
     ws.addEventListener('error', () => { /* close follows */ });
   }
