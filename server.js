@@ -1,38 +1,5 @@
 // server.js — DUPS Photo Contest voting (hardened v4 — public-internet model)
 // Run: npm install && npm start
-//
-// Threat model & mitigations: see REDTEAM.md (rounds 1, 2, 3).
-//
-// Single-file Node server. No external services. Persists to ./data/state.json
-// so a crash/restart doesn't lose the in-progress vote.
-//
-// v4 is built for PUBLIC-INTERNET deployment, not LAN. The admin runs this
-// behind a reverse proxy (nginx/Caddy/Cloudflare/Render/Fly/Railway/etc.)
-// with TLS and points voters at a public URL. The QR code encodes that
-// public URL.
-//
-// Required config:
-//   PUBLIC_URL   - canonical URL voters reach (e.g. https://vote.dups.club)
-//                  Drives the QR target AND the Origin allow-list.
-//                  If unset, server starts in DEV mode and uses http://localhost.
-// Optional config:
-//   PORT         - listen port (default 3000)
-//   TRUST_PROXY  - express trust-proxy value (default 'loopback'; use 1 for
-//                  a single front-proxy, or specific subnet for cloud)
-//   DEV_MODE     - "1" suppresses the no-HTTPS warning; only for local dev
-//   DUPS_DATA_DIR- override the data directory location
-//
-// v4 changes over v3:
-// - PUBLIC_URL-driven Origin check (no more LAN auto-detection)
-// - Per-IP voter join cap REMOVED (it broke under CGNAT / corporate / school
-//   networks — legitimate voters share IPs at scale). Replaced by:
-//     * "Lock Room" admin button (primary live defense)
-//     * IP-cluster warning at tally time (informational, not enforcement)
-//     * Single-redemption join tokens (carried over from v3)
-// - QR URL derived from PUBLIC_URL, not from request host
-// - HTTPS strongly recommended; loud boot warning if not
-// - Boot banner reflects public-internet model
-
 'use strict';
 
 const express = require('express');
@@ -52,9 +19,7 @@ const DATA_DIR      = process.env.DUPS_DATA_DIR || path.join(__dirname, 'data');
 const STATE_FILE    = path.join(DATA_DIR, 'state.json');
 const ARCHIVE_FILE  = path.join(DATA_DIR, 'archive.json');
 const DEV_MODE      = process.env.DEV_MODE === '1';
-// TRUST_PROXY parsing — Express accepts boolean, integer hop count, string
-// IP/CIDR list, or a function. We accept env strings 'true'/'false'/numbers
-// and pass them through correctly.
+
 function parseTrustProxy(s) {
   if (s === undefined || s === null || s === '') return 'loopback';
   const trimmed = String(s).trim();
@@ -65,15 +30,11 @@ function parseTrustProxy(s) {
 }
 const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
 
-// PUBLIC_URL parsing. If absent, run in dev mode against http://localhost:PORT.
-// If present, voters reach this URL. The QR encodes it; the Origin check
-// requires it.
 let PUBLIC_URL_STR = process.env.PUBLIC_URL || '';
 let PUBLIC_URL = null;
 if (PUBLIC_URL_STR) {
   try {
     PUBLIC_URL = new URL(PUBLIC_URL_STR);
-    // Strip trailing slash for clean concat
     PUBLIC_URL_STR = PUBLIC_URL.origin;
   } catch (e) {
     console.error(`[boot] PUBLIC_URL is not a valid URL: ${PUBLIC_URL_STR}`);
@@ -82,30 +43,24 @@ if (PUBLIC_URL_STR) {
 }
 const IS_PUBLIC_HTTPS = !!(PUBLIC_URL && PUBLIC_URL.protocol === 'https:');
 
-// Hard limits.
 const MAX_PHOTO_COUNT          = 500;
 const MAX_WS_PAYLOAD_BYTES     = 4 * 1024;
-const MAX_CONNECTIONS_PER_IP   = 8;        // simultaneous WS sockets per IP (anti-DoS, not anti-dupe)
+const MAX_CONNECTIONS_PER_IP   = 8;
 const MSG_RATE_BURST           = 30;
 const MSG_RATE_PER_SEC         = 10;
 const HEARTBEAT_INTERVAL_MS    = 30_000;
 const HEARTBEAT_TIMEOUT_MS     = 60_000;
 const JOIN_TOKEN_TTL_MS        = 6 * 60 * 60 * 1000;
 
-// Cookie names
 const VOTER_COOKIE_NAME = 'dups_voter';
 const ADMIN_COOKIE_NAME = 'dups_admin';
-
-// CSRF header. Browser cross-origin JS cannot set custom headers without a
-// preflight, and we set no CORS headers, so all cross-origin POSTs are blocked.
 const CSRF_HEADER = 'x-dups-origin';
 const CSRF_VALUE  = 'same-site';
 
-// HMAC secret — persisted across restarts so cookies survive.
 let SERVER_SECRET = null;
 
 // ---------------------------------------------------------------------------
-// Signed tokens (HMAC-SHA256, base64url, payload|ts|sig)
+// Signed tokens
 // ---------------------------------------------------------------------------
 function b64url(buf) {
   return Buffer.from(buf).toString('base64')
@@ -129,7 +84,6 @@ function verify(token, maxAgeMs) {
   if (!body || !sig) return null;
   const expected = hmac(body);
   if (sig.length !== expected.length) return null;
-  // constant-time compare on equal-length strings
   let diff = 0;
   for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
   if (diff !== 0) return null;
@@ -141,7 +95,7 @@ function verify(token, maxAgeMs) {
 }
 
 // ---------------------------------------------------------------------------
-// State (all in-memory, mirrored to disk on change)
+// State
 // ---------------------------------------------------------------------------
 const session = {
   id: null,
@@ -150,10 +104,11 @@ const session = {
   votingOpen: false,
   votingClosed: false,
   locked: false,
+  roundNumber: 1,           // increments with each new round
   votes: {},                // vid -> { photoNumber, updatedAt, ipHash }
   joinedVoters: {},         // vid -> { joinedAt, ipHash, jti }
-  redeemedJtis: {},         // jti -> vid    (which voter cookie redeemed this jti)
-  currentQrJti: null,       // the currently-broadcast QR's jti (for admin "rotate" UX)
+  redeemedJtis: {},
+  currentQrJti: null,
   results: null,
   createdAt: null,
 };
@@ -185,7 +140,6 @@ function persistSoon() {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     try {
-      // Write atomically so a crash mid-write doesn't corrupt state.
       const tmp = STATE_FILE + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(session));
       fs.renameSync(tmp, STATE_FILE);
@@ -202,9 +156,7 @@ function loadPersisted() {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      // Be defensive about older state files missing new fields, and strip
-      // any obsolete v3 fields (e.g. joinsByIpHash) that no longer apply.
-      Object.assign(session, { redeemedJtis: {}, currentQrJti: null }, data);
+      Object.assign(session, { redeemedJtis: {}, currentQrJti: null, roundNumber: 1 }, data);
       delete session.joinsByIpHash;
       console.log(`[boot] restored session ${session.id || '(none)'}`);
     }
@@ -225,13 +177,13 @@ function freshSession() {
   session.votingOpen = false;
   session.votingClosed = false;
   session.locked = false;
+  session.roundNumber = 1;
   session.votes = {};
   session.joinedVoters = {};
   session.redeemedJtis = {};
   session.currentQrJti = null;
   session.results = null;
   session.createdAt = new Date().toISOString();
-  delete session.joinsByIpHash; // strip any stale v3 field
   persistSoon();
 }
 
@@ -246,40 +198,26 @@ function log(event, fields = {}) {
 // Network helpers
 // ---------------------------------------------------------------------------
 function clientIp(req) {
-  // Honors X-Forwarded-For via trust proxy config. Falls back to socket.
   const ip = (req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
   return String(ip).replace(/^::ffff:/, '');
 }
-
 function ipHash(ip) {
   return crypto.createHash('sha256').update(ip + (SERVER_SECRET || '')).digest('hex').slice(0, 12);
 }
-
-// Origin allow-list. In production mode (PUBLIC_URL set), only the configured
-// origin is allowed. In dev mode (PUBLIC_URL unset), localhost variants are
-// allowed. Non-browser clients (no Origin header) are allowed; they can't
-// be the source of CSWSH.
 function isOriginAllowed(req) {
   const origin = req.headers.origin;
-  if (!origin) return true; // non-browser clients (curl/tests)
+  if (!origin) return true;
   let parsed;
   try { parsed = new URL(origin); } catch { return false; }
-  if (PUBLIC_URL) {
-    // Production: exact origin match (scheme + host + port).
-    return parsed.origin === PUBLIC_URL.origin;
-  }
-  // Dev mode: only localhost variants.
+  if (PUBLIC_URL) return parsed.origin === PUBLIC_URL.origin;
   const devHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
   return devHosts.has(parsed.hostname) || devHosts.has(parsed.host);
 }
-
 function isHttps(req) {
-  // True if PUBLIC_URL is https OR proxy says so OR request is already TLS.
   if (IS_PUBLIC_HTTPS) return true;
   if (req.secure || req.protocol === 'https') return true;
   return (req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https';
 }
-
 function setSignedCookie(res, name, value, req) {
   res.cookie(name, value, {
     httpOnly: true,
@@ -289,7 +227,6 @@ function setSignedCookie(res, name, value, req) {
     path: '/',
   });
 }
-
 function clearSignedCookie(res, name, req) {
   res.clearCookie(name, {
     httpOnly: true,
@@ -303,14 +240,12 @@ function clearSignedCookie(res, name, req) {
 // HTTP setup
 // ---------------------------------------------------------------------------
 const app = express();
-app.set('trust proxy', TRUST_PROXY); // honors X-Forwarded-* per env config
+app.set('trust proxy', TRUST_PROXY);
 const server = http.createServer(app);
 
 app.use(cookieParser());
 app.use(express.json({ limit: '8kb' }));
 
-// Build connect-src directive. In production (PUBLIC_URL set) we lock it to
-// the configured origin's WSS endpoint; in dev we allow ws: and wss: broadly.
 function buildConnectSrc() {
   if (PUBLIC_URL) {
     const wsOrigin = PUBLIC_URL.origin.replace(/^http/, 'ws');
@@ -320,7 +255,6 @@ function buildConnectSrc() {
 }
 const CSP_CONNECT_SRC = buildConnectSrc();
 
-// Security headers — NO 'unsafe-inline' in style-src.
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -328,49 +262,21 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  // HSTS in production HTTPS only — never on plain HTTP (could trap dev).
   if (IS_PUBLIC_HTTPS) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
-
-    //_____________________________________________________________________________________________________________
-    //  Pre Sort URL mod
-    //--------------------------------------------------------------------------------------------------------------
-
-   // res.setHeader('Content-Security-Policy',
-   // "default-src 'self'; " +
-   // "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
-   // "font-src 'self' https://fonts.gstatic.com data:; " +
-   // "script-src 'self'; " +
-   // "style-src 'self' https://fonts.googleapis.com; " +
-  //  `connect-src ${CSP_CONNECT_SRC}; ` +
- //   "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-//  );
-
-    //_____________________________________________________________________________________________________________
-    // end pre Sort URL mod
-    // Begin mod 1
-    //--------------------------------------------------------------------------------------------------------------
-    res.setHeader('Content-Security-Policy',
-        "default-src 'self'; " +
-        "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
-        "font-src 'self' https://fonts.gstatic.com data:; " +
-        "script-src 'self'; " +
-        "style-src 'self' https://fonts.googleapis.com; " +
-        `connect-src ${CSP_CONNECT_SRC} https://tinyurl.com; ` +
-        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-    );
-
-    //--------------------------------------------------------------------------------------------------------------
-    // end mod 1
-    //----------------------------------------------------------------------------------------------
-
-    next();
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "img-src 'self' data: https://dups.club https://*.dups.club https://i0.wp.com https://fonts.gstatic.com; " +
+    "font-src 'self' https://fonts.gstatic.com data:; " +
+    "script-src 'self'; " +
+    "style-src 'self' https://fonts.googleapis.com; " +
+    `connect-src ${CSP_CONNECT_SRC} https://tinyurl.com; ` +
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  );
+  next();
 });
 
-// CSRF guard for state-changing endpoints. Cross-origin browser JS cannot send
-// custom headers without a preflight; we don't reply to preflights from foreign
-// origins, so this is a hard wall.
 function requireCsrfHeader(req, res, next) {
   if ((req.headers[CSRF_HEADER] || '').toLowerCase() !== CSRF_VALUE) {
     return res.status(403).json({ error: 'csrf' });
@@ -383,7 +289,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- API: QR (admin only)
 app.get('/api/qr', requireAdmin, async (req, res) => {
   try {
-    // Reuse current jti if one exists; otherwise mint a fresh one.
     if (!session.currentQrJti) {
       session.currentQrJti = crypto.randomBytes(8).toString('hex');
       persistSoon();
@@ -398,17 +303,12 @@ app.get('/api/qr', requireAdmin, async (req, res) => {
   }
 });
 
-// Build the voter-facing URL that the QR code encodes. Preserves any path
-// from PUBLIC_URL (so PUBLIC_URL=https://example.com/voting works), normalizes
-// trailing slashes, and appends ?j=<joinToken>.
 function buildVoterUrl(req, joinToken) {
   let base;
   if (PUBLIC_URL) {
-    // Preserve full pathname from PUBLIC_URL; strip trailing slash for clean concat.
-    const path = PUBLIC_URL.pathname.replace(/\/+$/, '');
-    base = `${PUBLIC_URL.origin}${path}/`;
+    const p = PUBLIC_URL.pathname.replace(/\/+$/, '');
+    base = `${PUBLIC_URL.origin}${p}/`;
   } else {
-    // Dev fallback: synthesized from the admin's request.
     const proto = isHttps(req) ? 'https' : 'http';
     const host = req.headers.host || `localhost:${PORT}`;
     base = `${proto}://${host}/`;
@@ -416,15 +316,7 @@ function buildVoterUrl(req, joinToken) {
   return `${base}?j=${encodeURIComponent(joinToken)}`;
 }
 
-// --- API: voter join (single-redemption jti)
-//
-// NOTE: We deliberately do NOT cap voters per IP. Carrier-grade NAT (mobile
-// carriers, corporate offices, schools) routinely puts many legitimate users
-// behind a single IP. The defenses against incognito-mode dupe-voting are:
-//   1. Single-redemption join tokens (jti consumed on first use)
-//   2. Admin "Rotate QR" to invalidate outstanding tokens
-//   3. "Lock Room" to freeze the joiner list
-//   4. IP-cluster warnings at tally time (informational, not enforcement)
+// --- API: voter join
 app.post('/api/join', requireCsrfHeader, (req, res) => {
   const { joinToken } = req.body || {};
   if (!joinToken) return res.status(400).json({ error: 'no_token' });
@@ -433,7 +325,6 @@ app.post('/api/join', requireCsrfHeader, (req, res) => {
   if (parsed.sid !== session.id)         return res.status(400).json({ error: 'stale_session' });
   if (session.locked)                    return res.status(403).json({ error: 'locked' });
 
-  // Already a voter for this session? Reuse cookie. Idempotent.
   const existing = readVoterCookie(req);
   if (existing && existing.sid === session.id && session.joinedVoters[existing.vid]) {
     return res.json({ ok: true, voterId: existing.vid });
@@ -442,37 +333,16 @@ app.post('/api/join', requireCsrfHeader, (req, res) => {
   const ip  = clientIp(req);
   const ipH = ipHash(ip);
 
+  // Only block if QR was explicitly rotated/invalidated
+  if (parsed.jti && session.redeemedJtis[parsed.jti] === '__invalidated') {
+    log('voter_join_jti_rotated', { jti: parsed.jti, ipHash: ipH });
+    return res.status(409).json({ error: 'token_used', message: 'This QR code has been replaced. Please scan the new QR code.' });
+  }
 
-    // *************************************************** Change to allow multiple scans of the same QR code, with a single redemption per jti. ***************************************************
-
-  // Single-redemption jti: if this jti was already redeemed (or invalidated by
-  // an admin QR rotation), reject unless the requester has the exact cookie
-  // of the original redeemer.
-         // if (parsed.jti && session.redeemedJtis[parsed.jti]) {
-        //    const redeemerVid = session.redeemedJtis[parsed.jti];
-        //  const isOriginal = existing && existing.vid === redeemerVid && redeemerVid !== '__invalidated';
-        // if (!isOriginal) {
-        //log('voter_join_jti_replay', { jti: parsed.jti, ipHash: ipH, reason: redeemerVid === '__invalidated' ? 'rotated' : 'replay' });
-        //return res.status(409).json({ error: 'token_used', message: 'This QR code has already been used or has been replaced. Ask the Administrator for a fresh one.' });
-    // }
-    //}
-
-    // ******************************************** Replacement for the above block: ********************************************
-    // Allow multiple voters to scan the same QR code.
-    // Only block scans if the QR has been explicitly rotated by the admin.
-    if (parsed.jti && session.redeemedJtis[parsed.jti] === '__invalidated') {
-        log('voter_join_jti_rotated', { jti: parsed.jti, ipHash: ipH });
-        return res.status(409).json({ error: 'token_used', message: 'This QR code has been replaced. Please scan the new QR code.' });
-    }
-
-    // ****************************************** end replacement block ******************************************
-
-  // Mint a fresh voter cookie.
   const vid = crypto.randomBytes(8).toString('hex');
   const voterTok = sign({ kind: 'voter', sid: session.id, vid, jti: parsed.jti });
   setSignedCookie(res, VOTER_COOKIE_NAME, voterTok, req);
   session.joinedVoters[vid] = { joinedAt: Date.now(), ipHash: ipH, jti: parsed.jti };
-  if (parsed.jti) session.redeemedJtis[parsed.jti] = vid;
   persistSoon();
   log('voter_joined', { vid, jti: parsed.jti, ipHash: ipH });
   res.json({ ok: true, voterId: vid });
@@ -481,16 +351,12 @@ app.post('/api/join', requireCsrfHeader, (req, res) => {
 // --- API: admin claim
 app.post('/api/admin/claim', requireCsrfHeader, (req, res) => {
   const existing = readAdminCookie(req);
-
-  // Branch 1: existing cookie matches the current admin slot — idempotent OK.
   if (existing && existing.sid === session.id && existing.aid === session.adminTokenId) {
     return res.json({ ok: true, adminId: existing.aid });
   }
-  // Branch 2: slot is taken by someone else — reject.
   if (session.adminTokenId) {
     return res.status(409).json({ error: 'taken' });
   }
-  // Branch 3: slot is free — mint new admin.
   const aid = crypto.randomBytes(8).toString('hex');
   const tok = sign({ kind: 'admin', sid: session.id, aid });
   session.adminTokenId = aid;
@@ -500,14 +366,21 @@ app.post('/api/admin/claim', requireCsrfHeader, (req, res) => {
   res.json({ ok: true, adminId: aid });
 });
 
-// --- API: admin downloads the archive
+// --- API: admin archive download
 app.get('/api/admin/archive', requireAdmin, (req, res) => {
   res.json({ archive });
 });
 
-// --- API: public-ish state (cookies determine 'you')
+// --- API: public session state
 app.get('/api/session', (req, res) => {
   res.json(buildPublicState(identifyFromCookies(req)));
+});
+
+// --- API: clear cookies on reset
+app.post('/api/clear-cookies', requireCsrfHeader, (req, res) => {
+  clearSignedCookie(res, VOTER_COOKIE_NAME, req);
+  clearSignedCookie(res, ADMIN_COOKIE_NAME, req);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -533,7 +406,6 @@ function requireAdmin(req, res, next) {
   req.admin = a;
   next();
 }
-
 function identifyFromCookies(req) {
   const a = readAdminCookie(req);
   if (a && a.sid === session.id && a.aid === session.adminTokenId) return { role: 'admin', aid: a.aid };
@@ -544,7 +416,6 @@ function identifyFromCookies(req) {
   }
   return { role: null };
 }
-
 function buildPublicState(you) {
   const activeVoters = [...clients.values()].filter(c => c.role === 'voter').length;
   return {
@@ -554,6 +425,7 @@ function buildPublicState(you) {
     votingOpen: session.votingOpen,
     votingClosed: session.votingClosed,
     locked: session.locked,
+    roundNumber: session.roundNumber,
     joinedVoterCount: Object.keys(session.joinedVoters).length,
     activeVoterCount: activeVoters,
     voteCount: Object.keys(session.votes).length,
@@ -573,7 +445,6 @@ const wss = new WebSocketServer({
 
 server.on('upgrade', (req, socket, head) => {
   const ip = (req.socket && req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, '');
-
   if (!isOriginAllowed(req)) {
     log('ws_reject', { reason: 'origin', origin: req.headers.origin, ip });
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
@@ -621,7 +492,6 @@ wss.on('connection', (ws, req) => {
     bucket: { tokens: MSG_RATE_BURST, last: Date.now() },
   };
   clients.set(ws, meta);
-
   if (!ipConnections.has(ip)) ipConnections.set(ip, new Set());
   ipConnections.get(ip).add(ws);
 
@@ -684,7 +554,6 @@ function broadcast(msg, filter = null) {
     ws.send(payload);
   }
 }
-
 function stateForClient(meta) {
   let you = { role: meta.role };
   if (meta.role === 'voter' && meta.vid) {
@@ -695,7 +564,6 @@ function stateForClient(meta) {
   }
   return buildPublicState(you);
 }
-
 function broadcastState() {
   for (const [ws, meta] of clients.entries()) {
     if (ws.readyState !== ws.OPEN) continue;
@@ -714,6 +582,7 @@ function isPositiveInteger(v, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
 
 function handleMessage(ws, meta, msg) {
   switch (msg.type) {
+
     case 'set-photo-count': {
       if (meta.role !== 'admin') return reject(ws, 'not_admin');
       if (session.votingClosed) return reject(ws, 'voting_closed');
@@ -735,7 +604,7 @@ function handleMessage(ws, meta, msg) {
       session.results = null;
       if (hasVotes && msg.confirmReset) session.votes = {};
       persistSoon();
-      log('photo_count_set', { x, aid: meta.aid });
+      log('photo_count_set', { x, aid: meta.aid, round: session.roundNumber });
       broadcastState();
       sendTo(ws, { type: 'photo-count-set', photoCount: x });
       return;
@@ -749,11 +618,10 @@ function handleMessage(ws, meta, msg) {
       if (!isPositiveInteger(n, { min: 1, max: session.photoCount })) {
         return reject(ws, `Vote must be an integer between 1 and ${session.photoCount}.`);
       }
-      // Stamp the IP hash AT VOTE TIME — used for clustering check on close.
       const recordIpHash = session.joinedVoters[meta.vid] && session.joinedVoters[meta.vid].ipHash;
       session.votes[meta.vid] = { photoNumber: n, updatedAt: Date.now(), ipHash: recordIpHash };
       persistSoon();
-      log('vote_recorded', { vid: meta.vid, n });
+      log('vote_recorded', { vid: meta.vid, n, round: session.roundNumber });
       sendTo(ws, { type: 'vote-recorded', photoNumber: n });
       broadcastState();
       return;
@@ -766,18 +634,45 @@ function handleMessage(ws, meta, msg) {
       session.votingClosed = true;
       session.results = computeResults();
       persistSoon();
-      log('voting_closed', { totalVotes: session.results.totalVotes, aid: meta.aid });
+      log('voting_closed', { totalVotes: session.results.totalVotes, aid: meta.aid, round: session.roundNumber });
       broadcastState();
       broadcast({ type: 'voting-closed' }, m => m.role === 'voter');
       sendTo(ws, { type: 'results', results: session.results });
       return;
     }
 
+    case 'next-round': {
+      // Admin starts a new round — voters stay connected, QR stays the same
+      if (meta.role !== 'admin') return reject(ws, 'not_admin');
+      // Archive the current round results
+      if (Object.keys(session.votes).length > 0 || session.results) {
+        archive.push({
+          archivedAt: new Date().toISOString(),
+          sessionId: session.id,
+          roundNumber: session.roundNumber,
+          photoCount: session.photoCount,
+          votes: session.votes,
+          results: session.results,
+        });
+      }
+      // Increment round, clear votes and photo count, keep voters and admin
+      session.roundNumber = (session.roundNumber || 1) + 1;
+      session.photoCount = null;
+      session.votingOpen = false;
+      session.votingClosed = false;
+      session.votes = {};
+      session.results = null;
+      persistSoon();
+      log('next_round', { roundNumber: session.roundNumber, aid: meta.aid });
+      broadcastState();
+      // Tell voters to go to waiting screen
+      broadcast({ type: 'next-round', roundNumber: session.roundNumber }, m => m.role === 'voter');
+      sendTo(ws, { type: 'next-round', roundNumber: session.roundNumber });
+      return;
+    }
+
     case 'rotate-qr': {
       if (meta.role !== 'admin') return reject(ws, 'not_admin');
-      // Invalidate the previous QR's jti if it was never redeemed. We mark it
-      // with a sentinel '__invalidated' so that future scans of the old QR
-      // are rejected as token_used, the same way a normal redemption would be.
       const prev = session.currentQrJti;
       if (prev && !session.redeemedJtis[prev]) {
         session.redeemedJtis[prev] = '__invalidated';
@@ -799,32 +694,31 @@ function handleMessage(ws, meta, msg) {
     }
 
     case 'reset-session': {
+      // Master reset — clears everything including cookies and roles
       if (meta.role !== 'admin') return reject(ws, 'not_admin');
       if (Object.keys(session.votes).length > 0 || session.results) {
         archive.push({
           archivedAt: new Date().toISOString(),
           sessionId: session.id,
+          roundNumber: session.roundNumber,
           photoCount: session.photoCount,
           votes: session.votes,
           results: session.results,
         });
       }
-          log('session_reset', { previousSessionId: session.id });
-          freshSession();
-          // Tell clients to clear their cookies, then disconnect them.
-          broadcast({ type: 'reset' });
-          for (const [w, m] of clients.entries()) {
-              try { w.close(4000, 'session_reset'); } catch { }
-          }
-
-          return;
+      log('session_reset', { previousSessionId: session.id });
+      freshSession();
+      broadcast({ type: 'reset' });
+      for (const [w] of clients.entries()) {
+        try { w.close(4000, 'session_reset'); } catch {}
       }
+      return;
+    }
 
-      case 'heartbeat':
+    case 'heartbeat':
       sendTo(ws, { type: 'heartbeat-ack' });
       return;
   }
-  // unknown type: ignore
 }
 
 function reject(ws, message) {
@@ -835,8 +729,6 @@ function computeResults() {
   const tally = {};
   for (let i = 1; i <= session.photoCount; i++) tally[i] = 0;
   let total = 0;
-  // For admin's awareness, build IP cluster info: which IP hashes produced
-  // multiple votes. This is informational; it does NOT auto-invalidate any vote.
   const ipVoteCounts = {};
   for (const v of Object.values(session.votes)) {
     if (!Number.isInteger(v.photoNumber)) continue;
@@ -879,12 +771,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   log('boot', { port: PORT, sessionId: session.id, publicUrl: PUBLIC_URL && PUBLIC_URL.origin });
 });
-// --- API: clear cookies on reset
-app.post('/api/clear-cookies', requireCsrfHeader, (req, res) => {
-    clearSignedCookie(res, VOTER_COOKIE_NAME, req);
-    clearSignedCookie(res, ADMIN_COOKIE_NAME, req);
-    res.json({ ok: true });
-});
+
 function shutdown() {
   console.log('\nShutting down...');
   clearInterval(heartbeatTimer);
