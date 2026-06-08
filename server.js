@@ -816,9 +816,11 @@ function handleMessage(ws, meta, msg) {
           for (const [w, m] of clients.entries()) {
               try { w.close(4000, 'session_reset'); } catch { }
           }
-          return;
 
-    case 'heartbeat':
+          return;
+      }
+
+      case 'heartbeat':
       sendTo(ws, { type: 'heartbeat-ack' });
       return;
   }
