@@ -178,6 +178,11 @@
       sendMsg({ type: 'reset-session' });
     }
   });
+    $('#master-reset-btn-results').addEventListener('click', () => {
+        if (confirm('MASTER RESET: This will end the entire session and disconnect all voters. Are you sure?')) {
+            sendMsg({ type: 'reset-session' });
+        }
+    });
 
   $('#download-archive-btn').addEventListener('click', async () => {
     try {

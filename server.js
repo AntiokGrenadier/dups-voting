@@ -171,20 +171,22 @@ function loadPersisted() {
 }
 
 function freshSession() {
-  session.id = crypto.randomBytes(4).toString('hex');
-  session.adminTokenId = null;
-  session.photoCount = null;
-  session.votingOpen = false;
-  session.votingClosed = false;
-  session.locked = false;
-  session.roundNumber = 1;
-  session.votes = {};
-  session.joinedVoters = {};
-  session.redeemedJtis = {};
-  session.currentQrJti = null;
-  session.results = null;
-  session.createdAt = new Date().toISOString();
-  persistSoon();
+    session.id = crypto.randomBytes(4).toString('hex');
+    session.adminTokenId = null;
+    session.photoCount = null;
+    session.votingOpen = false;
+    session.votingClosed = false;
+    session.locked = false;
+    session.roundNumber = 1;
+    session.votes = {};
+    session.joinedVoters = {};
+    session.redeemedJtis = {};
+    session.currentQrJti = null;
+    session.results = null;
+    session.createdAt = new Date().toISOString();
+    // Delete persisted state so browser reconnects get a clean slate
+    try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { }
+    persistSoon();
 }
 
 // ---------------------------------------------------------------------------
